@@ -1,5 +1,5 @@
 // Copyright (C) 2021 UOS Technology Co., Ltd.
-// SPDX-FileCopyrightText: 2022 - 2023 UnionTech Software Technology Co., Ltd.
+// SPDX-FileCopyrightText: 2022 - 2024 UnionTech Software Technology Co., Ltd.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -24,6 +24,8 @@ extern "C" {
 #include <QStandardPaths>
 #include <QRegularExpression>
 #include <QTimer>
+#include <polkit-qt5-1/PolkitQt1/Authority>
+#include <QDBusMessage>
 
 #include <unistd.h>
 #include <sys/time.h>
@@ -130,6 +132,10 @@ static void cleanDirtyLFTFiles()
 
 LFTManager::~LFTManager()
 {
+    cpu_monitor_quit.unlock();
+    cpu_monitor_thread->wait();
+    delete cpu_monitor_thread;
+
     sync();
     clearFsBufMap();
     // 删除剩余脏文件(可能是sync失败)
@@ -150,6 +156,9 @@ QString LFTManager::cacheDir()
 
 QByteArray LFTManager::setCodecNameForLocale(const QByteArray &codecName)
 {
+    if (!checkAuthorization())
+        return QByteArray();
+
     const QTextCodec *old_codec = QTextCodec::codecForLocale();
 
     if (codecName.isEmpty())
@@ -311,6 +320,9 @@ static void removeBuf(fs_buf *buf, bool &removeLFTFile)
 
 bool LFTManager::addPath(QString path, bool autoIndex)
 {
+    if (!checkAuthorization())
+        return false;
+
     nDebug() << path << autoIndex;
 
     if (!path.startsWith("/")) {
@@ -407,6 +419,9 @@ bool LFTManager::addPath(QString path, bool autoIndex)
 
 bool LFTManager::removePath(const QString &path)
 {
+    if (!checkAuthorization())
+        return false;
+
     nDebug() << path;
 
     if (fs_buf *buf = _global_fsBufMap->take(path)) {
@@ -489,6 +504,9 @@ bool LFTManager::lftBuinding(const QString &path) const
 
 bool LFTManager::cancelBuild(const QString &path)
 {
+    if (!checkAuthorization())
+        return false;
+
     nDebug() << path;
 
     if (QFutureWatcher<fs_buf*> *watcher = _global_fsWatcherMap->take(path)) {
@@ -541,6 +559,9 @@ QStringList LFTManager::hasLFTSubdirectories(QString path) const
 // 重新从磁盘加载lft文件
 QStringList LFTManager::refresh(const QByteArray &serialUriFilter)
 {
+    if (!checkAuthorization())
+        return QStringList();
+
     nDebug() << serialUriFilter;
 
     const QString &cache_path = cacheDir();
@@ -611,6 +632,9 @@ QStringList LFTManager::refresh(const QByteArray &serialUriFilter)
 
 QStringList LFTManager::sync(const QString &mountPoint)
 {
+    if (!checkAuthorization())
+        return QStringList();
+
     nDebug() << mountPoint;
 
     QStringList path_list;
@@ -705,6 +729,9 @@ enum SearchError
 
 QStringList LFTManager::insertFileToLFTBuf(const QByteArray &file)
 {
+    if (!checkAuthorization())
+        return QStringList();
+
     cDebug() << file;
 
     auto buff_pair = getFsBufByPath(QString::fromLocal8Bit(file));
@@ -746,6 +773,9 @@ QStringList LFTManager::insertFileToLFTBuf(const QByteArray &file)
     } else {
         if (r == ERR_NO_MEM) {
             cWarning() << "Failed(No Memory):" << mount_path;
+        } else if (r == ERR_PATH_EXISTS) {
+            /* 由于事件合并的原因, 会经常导致报告此类错误. 由于它不属于程序问题, 特此降低日志等级 */
+            cDebug() << "Failed(Path Exists):" << mount_path;
         } else {
             cWarning() << "Failed:" << mount_path << ", result:" << r;
         }
@@ -756,6 +786,9 @@ QStringList LFTManager::insertFileToLFTBuf(const QByteArray &file)
 
 QStringList LFTManager::removeFileFromLFTBuf(const QByteArray &file)
 {
+    if (!checkAuthorization())
+        return QStringList();
+
     cDebug() << file;
 
     auto buff_pair = getFsBufByPath(QString::fromLocal8Bit(file));
@@ -805,6 +838,9 @@ QStringList LFTManager::removeFileFromLFTBuf(const QByteArray &file)
 
 QStringList LFTManager::renameFileOfLFTBuf(const QByteArray &oldFile, const QByteArray &newFile)
 {
+    if (!checkAuthorization())
+        return QStringList();
+
     cDebug() << oldFile << newFile;
 
     auto buff_pair = getFsBufByPath(QString::fromLocal8Bit(newFile));
@@ -862,6 +898,9 @@ QStringList LFTManager::renameFileOfLFTBuf(const QByteArray &oldFile, const QByt
 
 void LFTManager::quit()
 {
+    if (!checkAuthorization())
+        return;
+
     qApp->quit();
 }
 
@@ -905,6 +944,9 @@ QStringList LFTManager::parallelsearch(const QString &path, quint32 startOffset,
 
 void LFTManager::setAutoIndexExternal(bool autoIndexExternal)
 {
+    if (!checkAuthorization())
+        return;
+
     if (this->autoIndexExternal() == autoIndexExternal)
         return;
 
@@ -922,6 +964,9 @@ void LFTManager::setAutoIndexExternal(bool autoIndexExternal)
 
 void LFTManager::setAutoIndexInternal(bool autoIndexInternal)
 {
+    if (!checkAuthorization())
+        return;
+
     if (this->autoIndexInternal() == autoIndexInternal)
         return;
 
@@ -939,6 +984,9 @@ void LFTManager::setAutoIndexInternal(bool autoIndexInternal)
 
 void LFTManager::setLogLevel(int logLevel)
 {
+    if (!checkAuthorization())
+        return;
+
     nDebug() << "setLogLevel:" << logLevel;
 
     QString rules;
@@ -1025,13 +1073,17 @@ LFTManager::LFTManager(QObject *parent)
     sync_timer->setInterval(10 * 60 * 1000);
     sync_timer->start();
 
-    // 使用CPU资源和控制; 10秒检测一次，连续3次>85%, 则使用cgroup限制50%，连续3次<30%，解除限制。
+    // 使用CPU资源和控制; 10秒检测一次。
     cpu_row_count = 0;
     cpu_limited = false;
-    QTimer *resource_timer = new QTimer(this);
-    connect(resource_timer, &QTimer::timeout, this, &LFTManager::_cpuLimitCheck);
-    resource_timer->setInterval(10 * 1000);
-    resource_timer->start();
+    cpu_monitor_quit.lock();
+    cpu_monitor_thread = QThread::create(std::function<void ()> ([this]() {
+        while (!this->cpu_monitor_quit.tryLock(10 * 1000)) {
+            this->_cpuLimitCheck();
+        }
+        this->cpu_monitor_quit.unlock();
+    }));
+    cpu_monitor_thread->start();
 
     // 创建索引结束解除CPU限定
     connect(this, &LFTManager::buildFinished, this, [this]() {
@@ -1167,23 +1219,27 @@ void LFTManager::_cleanAllIndex()
     }
 }
 
-static QString getRootMountPoint(const DBlockDevice *block)
+QString getRootMountPoint(const DBlockDevice *block)
 {
-    const QByteArrayList &mount_points = block->mountPoints();
-    if(mount_points.size() == 1) {
-        return QString::fromLocal8Bit(mount_points.first());
+    /* Perform conversions early to detect potential crashes as early as possible */
+    QByteArrayList mountPointsByteArray = block->mountPoints();
+    QStringList mountPoints;
+
+    foreach (const QByteArray &item, mountPointsByteArray) {
+        mountPoints.append(QString::fromLocal8Bit(item));
+    }
+    if(mountPoints.size() == 1) {
+        return mountPoints.first();
     }
 
-    const auto mount_point_infos = deepin_anything_server::MountCacher::instance()->getRootsByPoints(mount_points);
-    for (QByteArray mount_point : mount_points) {
-        const QString root_point = mount_point_infos.value(mount_point);
-        if (root_point == "/") {
-            mount_point.chop(1);
-            return QString::fromLocal8Bit(mount_point);
+    QMap<QString, QString> mountPoint2Root = deepin_anything_server::MountCacher::instance()->getRootsByStrPoints(mountPoints);
+    for (const QString &mountPoint : mountPoints) {
+        if (mountPoint2Root.value(mountPoint) == "/") {
+            return mountPoint;
         }
     }
 
-    return QString::fromLocal8Bit(mount_points.first());
+    return mountPoints.first();
 }
 
 void LFTManager::_addPathByPartition(const DBlockDevice *block)
@@ -1214,6 +1270,8 @@ void LFTManager::onMountAdded(const QString &blockDevicePath, const QByteArray &
 {
     nInfo() << blockDevicePath << mountPoint;
 
+    deepin_anything_server::MountCacher::instance()->updateMountPoints();
+
     const QString &mount_root = QString::fromLocal8Bit(mountPoint);
     const QByteArray &serial_uri = LFTDiskTool::pathToSerialUri(mount_root);
 
@@ -1240,6 +1298,8 @@ void LFTManager::onMountAdded(const QString &blockDevicePath, const QByteArray &
 void LFTManager::onMountRemoved(const QString &blockDevicePath, const QByteArray &mountPoint)
 {
     nInfo() << blockDevicePath << mountPoint;
+
+    deepin_anything_server::MountCacher::instance()->updateMountPoints();
 
     const QString &mount_root = QString::fromLocal8Bit(mountPoint);
 //    const QByteArray &serial_uri = LFTDiskTool::pathToSerialUri(mount_root);
@@ -1619,4 +1679,24 @@ int LFTManager::_doSearch(void *vbuf, quint32 maxCount, const QString &path, con
         free(name_offsets);
 
     return total;
+}
+
+bool LFTManager::checkAuthorization(void)
+{
+    if (!calledFromDBus())
+        return true;
+
+    QString actionId("com.deepin.anything");
+    QString appBusName = message().service();
+    PolkitQt1::Authority::Result result;
+
+    result = PolkitQt1::Authority::instance()->checkAuthorizationSync(actionId,
+                                                                      PolkitQt1::SystemBusNameSubject(appBusName),
+                                                                      PolkitQt1::Authority::AllowUserInteraction);
+    if (result == PolkitQt1::Authority::Yes) {
+        return true;
+    }else {
+        sendErrorReply(QDBusError::AccessDenied);
+        return false;
+    }
 }

@@ -29,13 +29,14 @@ class MountCacher : public QObject
     Q_DISABLE_COPY(MountCacher)
 
 public:
+    ~MountCacher();
     static MountCacher *instance();
-    bool updateMountPoints();
     QString findMountPointByPath(const QString &path, bool hardreal = false);
     bool pathMatchType(const QString &path, const QString &type);
 
     // 块设备存在多个挂载点，获取他们的根
     QMap<QByteArray, QString> getRootsByPoints(const QByteArrayList &pointList);
+    QMap<QString, QString> getRootsByStrPoints(const QStringList &pointList);
 
     // 获取挂载点的设备（source）, 必须传入真实挂载点
     QString getDeviceByPoint(const QString &point);
@@ -43,11 +44,12 @@ public:
     // 获取所有根为指定的挂载点, 不指定则返回全部挂载点信息
     QList<MountPoint> getMountPointsByRoot(const QString &root = nullptr);
 
-private:
-    explicit MountCacher(QObject *parent = nullptr);
-    ~MountCacher();
+public slots:
+    bool updateMountPoints();
 
-    void checkCurrentMounts();
+protected:
+    explicit MountCacher(QObject *parent = nullptr);
+
 private:
     QList<MountPoint> mountPointList;
 };

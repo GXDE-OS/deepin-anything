@@ -9,6 +9,8 @@
 #include <QObject>
 #include <QDBusContext>
 #include <QTimer>
+#include <QMutex>
+#include <QThread>
 
 class DBlockDevice;
 class LFTManager : public QObject, protected QDBusContext
@@ -23,7 +25,7 @@ public:
 
     static LFTManager *instance();
     static QString cacheDir();
-    static QByteArray setCodecNameForLocale(const QByteArray &codecName);
+    QByteArray setCodecNameForLocale(const QByteArray &codecName);
     static void onFileChanged(QList<QPair<QByteArray, QByteArray>> &actionList);
 
     bool addPath(QString path, bool autoIndex = false);
@@ -80,6 +82,8 @@ protected:
 private:
     uint cpu_row_count;
     bool cpu_limited;
+    QMutex cpu_monitor_quit;
+    QThread *cpu_monitor_thread;
     QStringList building_paths;
     bool _isAutoIndexPartition() const;
 
@@ -103,6 +107,8 @@ private:
     QStringList _setRulesByDefault(const QStringList &rules, quint32 startOffset, quint32 endOffset) const;
     QStringList _enterSearch(const QString &path, const QString &keyword, const QStringList &rules, quint32 &startOffsetReturn, quint32 &endOffsetReturn) const;
     int _doSearch(void *vbuf, quint32 maxCount, const QString &path, const QString &keyword, quint32 *startOffset, quint32 *endOffset, QList<uint32_t> &results, const QStringList &rules = {}) const;
+
+    bool checkAuthorization(void);
 };
 
 #endif // LFTMANAGER_H
