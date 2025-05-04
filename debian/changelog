@@ -1,6 +1,7 @@
-deepin-anything (6.1.9) unstable; urgency=medium
+deepin-anything (6.1.9-1) unstable; urgency=medium
 
   * Sync with upstream
+  * add deps libpcre3
 
  -- Deepin Package Builder <packages@deepin.com>  Thu, 07 Mar 2024 13:27:30 +0800
 
