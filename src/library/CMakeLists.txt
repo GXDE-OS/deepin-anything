@@ -14,7 +14,8 @@ endif()
 # Setup the environment
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLIB REQUIRED glib-2.0)
-pkg_check_modules(LIBPCRE REQUIRED libpcre)
+#pkg_check_modules(LIBPCRE REQUIRED libpcre)
+pkg_check_modules(LIBPCRE REQUIRED libpcre2-8)
 
 set(3RD_DIR "../../3rdparty")
 

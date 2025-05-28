@@ -1,6 +1,7 @@
 deepin-anything (6.1.10) UNRELEASED; urgency=medium
 
   * feat: Fix compile error and add support to kernel 6.15
+  * 使用 pcre2
 
  -- gfdgd_xi <3025613752@qq.com>  Wed, 28 May 2025 23:02:45 +0800
 
